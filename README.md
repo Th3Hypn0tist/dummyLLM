@@ -1,44 +1,38 @@
 # dummyLLM
 
-Deterministic HTTP job-queue simulator for testing LLM integrations.
+Deterministic, environment-controlled LLM job simulator for testing Q /
+runner systems.
 
-dummyLLM acts as a controllable backend for execution engines, task
-runners, or agent systems before integrating a real language model. It
-provides predictable behavior including success, failure, slow
-responses, hangs, and flaky execution modes.
+dummyLLM behaves like a minimal async LLM backend while keeping all
+testing controls **server-side only**.
 
-## Features
+Client payloads remain strictly standard.
 
--   HTTP job-based API
--   Deterministic simulation (seed support)
--   Controlled latency
--   Failure simulation
--   Hang simulation (client must enforce timeout)
--   Cancel endpoint
--   In-memory store
--   Minimal dependencies (FastAPI + Uvicorn)
+------------------------------------------------------------------------
 
-## API
+## Version
 
-### GET /health
+0.3.1
 
-Health check.
+------------------------------------------------------------------------
 
-Response:
+## Design Goals
 
-``` json
-{
-  "ok": true,
-  "name": "dummyLLM",
-  "time": 1700000000
-}
-```
+-   Standard client payload (no simulate flags)
+-   Deterministic execution
+-   Reproducible chaos testing
+-   Server-side behavior control via ENV
+-   ELIZA default mode for interactive testing
+-   Echo mode for payload verification
 
-### POST /v1/jobs
+This is not a real LLM.\
+It is a deterministic job behavior simulator.
 
-Create a simulated job.
+------------------------------------------------------------------------
 
-Request body:
+## Standard Client Payload
+
+POST `/v1/jobs`
 
 ``` json
 {
@@ -50,89 +44,73 @@ Request body:
     ]
   },
   "timeout_ms": 8000,
-  "trace_id": "optional-trace-id",
-  "simulate": {
-    "mode": "ok | fail | slow | hang | flaky | timeout",
-    "latency_ms": 250,
-    "seed": 1337,
-    "fail_message": "simulated error",
-    "ok_text": "custom success text"
-  }
+  "trace_id": "optional"
 }
 ```
 
-Response:
+No simulation parameters are allowed in the request.
 
-``` json
-{
-  "id": "job_xxxxxxxxxxxx",
-  "state": "queued",
-  "created_at": 1700000000
-}
-```
+------------------------------------------------------------------------
 
-### GET /v1/jobs/{id}
+## Environment Configuration
 
-Retrieve job status.
+### Global Mode
 
-Response:
+    DUMMYLLM_MODE=ok|echo|slow|fail|hang|timeout|flaky|random
 
-``` json
-{
-  "id": "job_xxxxxxxxxxxx",
-  "state": "queued | running | ok | fail | timeout | cancelled",
-  "created_at": 1700000000,
-  "updated_at": 1700000001,
-  "result": {
-    "text": "assistant response",
-    "usage": {
-      "prompt_tokens": 0,
-      "completion_tokens": 0
-    }
-  },
-  "error": {
-    "code": "SIM_FAIL | TIMEOUT | CANCELLED",
-    "message": "error message"
-  }
-}
-```
+Default (if unset):
 
-### POST /v1/jobs/{id}/cancel
+    ok
 
-Cancel a running job.
-
-Response:
-
-``` json
-{
-  "id": "job_xxxxxxxxxxxx",
-  "state": "cancelled"
-}
-```
-
-## Simulation Modes
+### Mode Behavior
 
   Mode      Behavior
-  --------- --------------------------------------------------
-  ok        Completes successfully
-  fail      Returns simulated failure
-  slow      Completes successfully but with extended latency
-  hang      Never completes (client must enforce timeout)
-  flaky     Random success/failure/stall (seedable)
-  timeout   Server marks job as timeout
+  --------- ---------------------------------------------------------
+  ok        ELIZA chat response
+  echo      Returns `args.messages` verbatim (minified JSON string)
+  slow      ok but latency ×6
+  fail      SIM_FAIL
+  hang      Never completes (client must timeout)
+  timeout   Server returns TIMEOUT
+  flaky     Deterministic fail/hang/ok mix
+  random    Weighted random per job
 
-If `seed` is provided, flaky mode becomes deterministic.
+------------------------------------------------------------------------
+
+### Random Mode Weights
+
+    DUMMYLLM_RANDOM_WEIGHTS="ok=70,echo=10,slow=10,fail=5,hang=3,timeout=2,flaky=0"
+
+If all weights are zero → defaults to `ok`.
+
+------------------------------------------------------------------------
+
+### Base Latency
+
+    DUMMYLLM_LATENCY_MS=250
+
+Used by ok/echo.\
+`slow` multiplies this by 6.
+
+------------------------------------------------------------------------
+
+### Deterministic Seed
+
+    DUMMYLLM_SEED=1337
+
+Same seed = reproducible random mode selection and ELIZA variation.
+
+------------------------------------------------------------------------
 
 ## Installation
 
 ``` bash
-git clone <repo-url>
-cd dummyLLM
-
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+------------------------------------------------------------------------
 
 ## Run
 
@@ -140,54 +118,87 @@ pip install -r requirements.txt
 uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
-Server:
-
--   http://127.0.0.1:8787\
--   Swagger UI: http://127.0.0.1:8787/docs
-
-## Example
-
-Create job:
+Optional env override example:
 
 ``` bash
-curl -X POST http://127.0.0.1:8787/v1/jobs   -H "Content-Type: application/json"   -d '{
-    "op": "llm.chat",
-    "args": {"model": "llama3.1:8b"},
-    "simulate": {"mode": "ok", "latency_ms": 200}
-  }'
+export DUMMYLLM_MODE=random
+export DUMMYLLM_RANDOM_WEIGHTS="ok=70,echo=10,slow=10,fail=5,hang=3,timeout=2,flaky=0"
+export DUMMYLLM_LATENCY_MS=250
+export DUMMYLLM_SEED=1337
+
+uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
-Poll status:
+------------------------------------------------------------------------
 
-``` bash
-curl http://127.0.0.1:8787/v1/jobs/<JOB_ID>
-```
+## API Endpoints
 
-## Intended Use
+### Health
 
-dummyLLM is useful for:
+GET `/health`
 
--   Testing task execution engines
--   Validating timeout logic
--   Testing retry strategies
--   Simulating flaky backends
--   CI integration tests
--   Offline development
+Returns active mode, latency, seed, and weights (if random).
 
-## Design Philosophy
+------------------------------------------------------------------------
 
-dummyLLM does not attempt to emulate LLM semantics.
+### Create Job
 
-It simulates execution behavior only:
+POST `/v1/jobs`
 
--   state transitions
--   latency
--   failure modes
--   cancellation
+Returns job id.
 
-This makes it suitable for validating execution pipelines independently
-of model quality.
+------------------------------------------------------------------------
+
+### Get Job Status
+
+GET `/v1/jobs/{id}`
+
+States:
+
+    queued | running | ok | fail | timeout | cancelled
+
+------------------------------------------------------------------------
+
+### Cancel Job
+
+POST `/v1/jobs/{id}/cancel`
+
+------------------------------------------------------------------------
+
+### Debug Request Inspection
+
+GET `/v1/jobs/{id}/request`
+
+Returns:
+
+-   Original op
+-   Original args
+-   timeout_ms
+-   trace_id
+-   chosen_mode
+-   base_latency_ms
+-   seed
+-   random_weights (if random mode)
+
+This allows verification that Q did not mutate payload.
+
+------------------------------------------------------------------------
+
+## Testing Philosophy
+
+dummyLLM validates:
+
+-   State transitions
+-   Timeout logic
+-   Cancellation
+-   Retry behavior
+-   Payload integrity
+
+Q remains clean and standards-compliant.\
+dummyLLM acts as a deterministic chaos engine.
+
+------------------------------------------------------------------------
 
 ## License
 
-MIT
+MIT (or your choice)
