@@ -201,4 +201,4 @@ dummyLLM acts as a deterministic chaos engine.
 
 ## License
 
-MIT (or your choice)
+open domain
